@@ -1,45 +1,45 @@
-# Convenciones de la API
+# API conventions
 
 ## gRPC first
 
-- El contrato está en `api/proto/oms/<contexto>/v1/*.proto` y se valida con `buf lint` (estilo STANDARD) y `buf breaking` (compatibilidad a nivel de fichero).
-- REST **no se escribe a mano**: cada RPC declara su ruta con `google.api.http` y grpc-gateway la transcodifica. El OpenAPI (`/openapi.json`) también se genera.
-- Los nombres siguen las Google API Improvement Proposals: recursos en plural (`/v1/orders`), acciones con sufijo `:verbo` (`/v1/orders/{id}:cancel`) y JSON en lowerCamelCase.
-- Los enteros de 64 bits se serializan en JSON como **string** (`"totalMinor": "8498"`), como dicta proto3 JSON. Los clientes JavaScript no pierden precisión.
+- The contract lives in `api/proto/oms/<context>/v1/*.proto` and is checked with `buf lint` (STANDARD style) and `buf breaking` (file-level compatibility).
+- REST is **never hand-written**: each RPC declares its route with `google.api.http` and grpc-gateway transcodes it. The OpenAPI document (`/openapi.json`) is generated too.
+- Naming follows the Google API Improvement Proposals: plural resources (`/v1/orders`), actions with a `:verb` suffix (`/v1/orders/{id}:cancel`), lowerCamelCase JSON.
+- 64-bit integers are serialised in JSON as **strings** (`"totalMinor": "8498"`), as proto3 JSON mandates, so JavaScript clients do not lose precision.
 
-## Cabeceras
+## Headers
 
-| Cabecera | Obligatoria | Uso |
+| Header | Required | Purpose |
 |---|---|---|
-| `X-Tenant-Id` | Sí | UUID del tenant. En gRPC es la metadata `x-tenant-id`. Ver [multitenancy.md](multitenancy.md) |
-| `X-Request-Id` | No | Se propaga a gRPC para correlación |
-| `traceparent` | No | W3C Trace Context; si llega, la traza continúa |
+| `X-Tenant-Id` | Yes | Tenant UUID. In gRPC it is the `x-tenant-id` metadata. See [multitenancy.md](multitenancy.md) |
+| `X-Request-Id` | No | Forwarded to gRPC for correlation |
+| `traceparent` | No | W3C Trace Context; when present, the trace continues |
 
-## Comandos y queries
+## Commands and queries
 
-- Los **comandos** (`PlaceOrder`, `CancelOrder`) devuelven solo identificadores.
-- Las **queries** (`GetOrder`, `ListOrders`) leen el modelo de lectura, que es **eventualmente consistente**. Justo después de un comando, un `GET` puede devolver 404 o una versión anterior durante unos milisegundos. Los clientes que necesiten leer su propia escritura reintentan comparando el campo `version`.
+- **Commands** (`PlaceOrder`, `CancelOrder`) return identifiers only.
+- **Queries** (`GetOrder`, `ListOrders`) read the read model, which is **eventually consistent**. Right after a command, a `GET` may return 404 or an older version for a few milliseconds. Clients that need read-your-writes retry while comparing the `version` field.
 
-## Idempotencia
+## Idempotency
 
-`PlaceOrder` exige `idempotencyKey` (hasta 128 caracteres), única por tenant:
+`PlaceOrder` requires an `idempotencyKey` (up to 128 characters), unique per tenant:
 
-- con la misma clave y el mismo cuerpo devuelve el mismo `orderId` (reintento seguro);
-- con la misma clave y otro cuerpo responde `409 ALREADY_EXISTS`, `reason: idempotency_key_reused`.
+- the same key with the same body returns the same `orderId` (a safe retry);
+- the same key with a different body returns `409 ALREADY_EXISTS`, `reason: idempotency_key_reused`.
 
-`CancelOrder` es naturalmente idempotente en efecto: repetirlo devuelve `FAILED_PRECONDITION` (`order_already_cancelled`) sin cambiar nada.
+`CancelOrder` is idempotent in effect: repeating it returns `FAILED_PRECONDITION` (`order_already_cancelled`) and changes nothing.
 
-## Paginación
+## Pagination
 
-`ListOrders` usa paginación por cursor (keyset sobre `placed_at, id`), estable aunque entren pedidos nuevos:
+`ListOrders` uses cursor pagination (keyset on `placed_at, id`), which stays stable while new orders arrive:
 
-- `pageSize`: por defecto 50, máximo 200;
-- `pageToken`: opaco; se pasa el `nextPageToken` de la respuesta anterior;
-- un `nextPageToken` vacío indica que no hay más páginas.
+- `pageSize`: defaults to 50, maximum 200;
+- `pageToken`: opaque; pass the previous response's `nextPageToken`;
+- an empty `nextPageToken` means there are no more pages.
 
-## Errores
+## Errors
 
-Formato `google.rpc.Status`, igual en gRPC y en REST:
+The `google.rpc.Status` format, identical over gRPC and REST:
 
 ```json
 {
@@ -53,10 +53,10 @@ Formato `google.rpc.Status`, igual en gRPC y en REST:
 }
 ```
 
-Los clientes deciden por `reason`, que es estable y forma parte del contrato, nunca por `message`. Los códigos están en `internal/*/domain/errors.go`.
+Clients branch on `reason`, which is stable and part of the contract, never on `message`. The codes are defined in `internal/*/domain/errors.go`.
 
-## Versionado
+## Versioning
 
-- Cambios compatibles (añadir campos, RPCs o valores de enum) se hacen en `v1`.
-- Cambios incompatibles crean un paquete `v2` que convive con `v1` hasta retirarlo. `buf breaking` impide romper `v1` por accidente.
-- Nunca se reutilizan números de campo: se marcan con `reserved`.
+- Compatible changes (new fields, RPCs or enum values) go into `v1`.
+- Breaking changes create a `v2` package that coexists with `v1` until `v1` is retired. `buf breaking` stops `v1` from breaking by accident.
+- Field numbers are never reused; removed fields are marked `reserved`.

@@ -1,61 +1,61 @@
-# Eventos y mensajería
+# Events and messaging
 
-## Garantías
+## Guarantees
 
-| Garantía | Mecanismo |
+| Guarantee | Mechanism |
 |---|---|
-| No hay estado sin evento ni evento sin estado | **Transactional outbox**: el evento se inserta en `messaging.outbox` en la misma transacción que el agregado |
-| El broker no pierde mensajes aceptados | *Publisher confirms*, mensajes persistentes y colas *quorum* (replicadas) |
-| Cada consumidor procesa cada mensaje una sola vez | **Inbox**: `INSERT ... ON CONFLICT DO NOTHING` en la misma transacción que el efecto |
-| Los mensajes venenosos no bloquean la cola | `x-delivery-limit` (5 por defecto) y después *dead-letter* a `<cola>.dlq` |
-| Los eventos viejos o repetidos no pisan datos nuevos | Guarda de versión en proyecciones: `WHERE version < $evento` |
+| No state without its event, no event without its state | **Transactional outbox**: the event is inserted into `messaging.outbox` in the same transaction as the aggregate |
+| The broker does not lose accepted messages | *Publisher confirms*, persistent messages and replicated *quorum* queues |
+| Each consumer processes each message once | **Inbox**: `INSERT ... ON CONFLICT DO NOTHING` in the same transaction as the side effect |
+| Poison messages do not block the queue | `x-delivery-limit` (5 by default), then *dead-lettering* to `<queue>.dlq` |
+| Old or repeated events do not overwrite newer data | Version guard in projections: `WHERE version < $event` |
 
-La entrega es **at-least-once**. Cualquier consumidor nuevo debe usar `inbox.Handle`.
+Delivery is **at-least-once**. Every new consumer must use `inbox.Handle`.
 
-## Topología
+## Topology
 
 ```text
 exchange oms.events (topic, durable)
-  routing key = nombre completo del mensaje proto, p. ej. oms.order.v1.OrderPlaced
-  └── oms.ordering.order-projector   (quorum, bind oms.order.v1.*)
+  routing key = fully qualified proto message name, e.g. oms.order.v1.OrderPlaced
+  └── oms.ordering.order-projector     (quorum, bound to oms.order.v1.*)
 exchange oms.events.dlx (direct)
   └── oms.ordering.order-projector.dlq (quorum)
 ```
 
-Cada suscripción declara su propia cola y su DLQ al arrancar (`rabbitmq.Consume`). Los exchanges los declara el cliente al conectar.
+Each subscription declares its own queue and DLQ on start-up (`rabbitmq.Consume`). The client declares the exchanges when it connects.
 
-## Formato del mensaje
+## Message format
 
-| Propiedad AMQP | Valor |
+| AMQP property | Value |
 |---|---|
-| `message_id` | UUIDv7 del mensaje (clave del inbox) |
+| `message_id` | Message UUIDv7 (the inbox key) |
 | `type` | `oms.order.v1.OrderPlaced` |
 | `content_type` | `application/x-protobuf` |
-| `delivery_mode` | 2 (persistente) |
-| header `x-tenant-id` | tenant del agregado |
-| header `x-aggregate-id` / `x-aggregate-version` | para ordenar y deduplicar |
-| headers `traceparent`, `tracestate` | contexto de traza W3C |
+| `delivery_mode` | 2 (persistent) |
+| header `x-tenant-id` | the aggregate's tenant |
+| headers `x-aggregate-id` / `x-aggregate-version` | ordering and deduplication |
+| headers `traceparent`, `tracestate` | W3C trace context |
 
-El cuerpo es el mensaje protobuf de `order_events.proto`. Los eventos evolucionan con las mismas reglas que la API: añadir campos sí, renumerar o cambiar tipos no.
+The body is the protobuf message from `order_events.proto`. Events evolve under the same rules as the API: adding fields is fine; renumbering or changing types is not.
 
-## Orden
+## Ordering
 
-- El relay publica en orden de `seq` y se detiene en el primer fallo, así que con **un** relay el orden por agregado se conserva.
-- Con varios relays, o con reintentos, puede llegar `OrderCancelled` antes que `OrderPlaced`. El proyector devuelve `ErrViewMissing`, el mensaje se reintenta y, cuando la vista exista, se aplica. La guarda de versión descarta lo que llegue tarde.
+- The relay publishes in `seq` order and stops at the first failure, so with **one** relay per-aggregate order is preserved.
+- With several relays, or with retries, `OrderCancelled` can arrive before `OrderPlaced`. The projector returns `ErrViewMissing`, the message is retried, and it is applied once the view exists. The version guard discards anything that arrives late.
 
-## Reintentos y DLQ
+## Retries and the DLQ
 
-1. Si el handler falla, se hace `nack(requeue=true)`.
-2. RabbitMQ cuenta las entregas (`x-delivery-count`) y, al superar `x-delivery-limit`, mueve el mensaje a `<cola>.dlq`.
-3. Una DLQ con mensajes es una alerta: revisa el panel "RabbitMQ queues" en Grafana. Para reprocesar, sigue el runbook de [operations.md](operations.md#reprocesar-la-dlq).
+1. When the handler fails, the message is `nack`ed with `requeue=true`.
+2. RabbitMQ counts deliveries (`x-delivery-count`) and, once `x-delivery-limit` is exceeded, moves the message to `<queue>.dlq`.
+3. A DLQ with messages is an alert: check the "RabbitMQ queues" panel in Grafana. To replay, follow the runbook in [operations.md](operations.md#replay-the-dlq).
 
-## Limpieza
+## Housekeeping
 
-Las filas publicadas del outbox y las antiguas del inbox crecen sin límite. En producción, programa una purga periódica, por ejemplo con `pg_cron`:
+Published outbox rows and old inbox rows grow without bound. In production, schedule a periodic purge, for example with `pg_cron`:
 
 ```sql
 DELETE FROM messaging.outbox WHERE published_at < now() - interval '7 days';
 DELETE FROM messaging.inbox  WHERE processed_at < now() - interval '30 days';
 ```
 
-Conserva el inbox más tiempo que la ventana máxima de reentrega posible.
+Keep the inbox longer than the longest possible redelivery window.

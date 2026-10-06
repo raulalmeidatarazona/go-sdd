@@ -1,8 +1,8 @@
-# Arquitectura
+# Architecture
 
-## Capas y regla de dependencias
+## Layers and the dependency rule
 
-Arquitectura hexagonal por bounded context. Las dependencias solo apuntan hacia dentro:
+Hexagonal architecture per bounded context. Dependencies only point inwards:
 
 ```text
 transport/grpcapi ─┐
@@ -10,38 +10,38 @@ infrastructure/* ──┼──► application/{command,query,projection} ─�
 module.go ─────────┘
 ```
 
-| Capa | Contiene | No puede |
+| Layer | Contains | Must not |
 |---|---|---|
-| `domain` | Agregados, value objects, eventos, errores y puertos (`Repository`) | Importar SQL, gRPC, proto ni RabbitMQ |
-| `application` | Un handler por caso de uso y puertos de lectura y proyección | Conocer Postgres ni proto; decidir códigos HTTP o gRPC |
-| `infrastructure` | Adaptadores: Postgres y codec protobuf de eventos | Contener reglas de negocio |
-| `transport` | Mapeo proto ↔ comandos y queries | Contener reglas de negocio ni acceder a la base de datos |
-| `module.go` | Composición: crea adaptadores, handlers y suscripciones | — |
-| `internal/platform` | Infraestructura transversal sin lógica de negocio | Importar ningún bounded context |
+| `domain` | Aggregates, value objects, events, errors and ports (`Repository`) | Import SQL, gRPC, proto or RabbitMQ |
+| `application` | One handler per use case; read and projection ports | Know Postgres or proto; choose HTTP or gRPC codes |
+| `infrastructure` | Adapters: Postgres and the protobuf event codec | Contain business rules |
+| `transport` | Mapping proto ↔ commands and queries | Contain business rules or touch the database |
+| `module.go` | Composition: builds adapters, handlers and subscriptions | — |
+| `internal/platform` | Cross-cutting infrastructure with no business logic | Import any bounded context |
 
-Los bounded contexts no se importan entre sí. Se comunican por eventos de integración (proto en RabbitMQ) o por su API gRPC.
+Bounded contexts do not import each other. They communicate through integration events (protobuf over RabbitMQ) or their gRPC API.
 
-## Flujo de un comando
+## Command flow
 
 ```mermaid
 sequenceDiagram
-  participant Cliente
+  participant Client
   participant GW as grpc-gateway (:8080)
   participant S as gRPC (:9090)
   participant H as PlaceOrderHandler
   participant DB as PostgreSQL
-  Cliente->>GW: POST /v1/orders + X-Tenant-Id
+  Client->>GW: POST /v1/orders + X-Tenant-Id
   GW->>S: PlaceOrder (metadata x-tenant-id)
-  S->>S: interceptores: recovery → tenant → errores
-  S->>H: cqrs.Observe (span + métrica + log)
+  S->>S: interceptors: recovery → tenant → errors
+  S->>H: cqrs.Observe (span + metric + log)
   H->>DB: BEGIN; set_config('app.tenant_id')
   H->>DB: idempotency lookup
   H->>DB: INSERT orders, order_lines, outbox
   H->>DB: COMMIT
-  S-->>Cliente: { orderId }
+  S-->>Client: { orderId }
 ```
 
-## Flujo de un evento
+## Event flow
 
 ```mermaid
 sequenceDiagram
@@ -50,28 +50,28 @@ sequenceDiagram
   participant MQ as RabbitMQ
   participant P as Projector (worker)
   Relay->>DB: SELECT ... FOR UPDATE SKIP LOCKED
-  Relay->>MQ: publish (routing key = oms.order.v1.OrderPlaced), espera confirm
+  Relay->>MQ: publish (routing key = oms.order.v1.OrderPlaced), await confirm
   Relay->>DB: UPDATE published_at; COMMIT
-  MQ->>P: entrega (headers: tenant, versión, traceparent)
+  MQ->>P: deliver (headers: tenant, version, traceparent)
   P->>DB: BEGIN (tenant); INSERT inbox ON CONFLICT DO NOTHING
-  P->>DB: upsert de la vista con guarda de versión; COMMIT
-  P->>MQ: ack (o nack → reintento → DLQ)
+  P->>DB: version-guarded view upsert; COMMIT
+  P->>MQ: ack (or nack → retry → DLQ)
 ```
 
-La traza es **una sola** de punta a punta: el `traceparent` se guarda en el outbox y viaja en las cabeceras AMQP.
+The trace is **a single trace** end to end: the `traceparent` is stored in the outbox and travels in the AMQP headers.
 
-## Procesos
+## Processes
 
-| Proceso | Responsabilidad | Escala |
+| Process | Responsibility | Scaling |
 |---|---|---|
-| `oms-api` | gRPC + REST; solo escribe en Postgres | Horizontal, sin estado |
-| `oms-worker` | Relay del outbox + consumidores | Horizontal; el relay reparte trabajo con `SKIP LOCKED` y las colas *quorum* reparten mensajes |
+| `oms-api` | gRPC + REST; writes to Postgres only | Horizontal, stateless |
+| `oms-worker` | Outbox relay + consumers | Horizontal; the relay shares work with `SKIP LOCKED` and quorum queues share messages |
 
-La API no depende de RabbitMQ: si el broker cae, se siguen aceptando pedidos y los eventos esperan en el outbox. El worker es *crash-only*: si pierde el broker, termina y Docker o Kubernetes lo reinicia.
+The API does not depend on RabbitMQ: if the broker is down, orders are still accepted and their events wait in the outbox. The worker is *crash-only*: if it loses the broker it exits and Docker or Kubernetes restarts it.
 
-## Modelo de errores
+## Error model
 
-El dominio y la aplicación devuelven `apperr.Error{Kind, Code, Message}`. Un único interceptor (`grpcx.ToStatus`) traduce `Kind` a código gRPC y añade `google.rpc.ErrorInfo{reason: Code, domain: "oms"}`. grpc-gateway traduce el código gRPC a HTTP. Los errores internos nunca exponen su mensaje.
+Domain and application code return `apperr.Error{Kind, Code, Message}`. A single interceptor (`grpcx.ToStatus`) maps `Kind` to a gRPC code and attaches `google.rpc.ErrorInfo{reason: Code, domain: "oms"}`. grpc-gateway maps the gRPC code to HTTP. Internal errors never expose their message.
 
 | Kind | gRPC | HTTP |
 |---|---|---|
@@ -83,6 +83,6 @@ El dominio y la aplicación devuelven `apperr.Error{Kind, Code, Message}`. Un ú
 | FailedPrecondition | FAILED_PRECONDITION | 400 |
 | Internal | INTERNAL | 500 |
 
-## Decisiones
+## Decisions
 
-Las razones de cada elección están en los [ADRs](adr/).
+The rationale for each choice lives in the [ADRs](adr/).

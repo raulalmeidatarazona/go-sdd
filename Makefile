@@ -7,7 +7,7 @@ BUF := $(BIN)/buf
 BUF_VERSION := v1.73.0
 PROTOC_GEN_GO_VERSION := v1.36.12
 PROTOC_GEN_GO_GRPC_VERSION := v1.6.2
-GRPC_GATEWAY_VERSION := v2.31.0
+GRPC_GATEWAY_VERSION := v2.30.0
 
 LOCAL_DB_URL := postgres://oms_app:oms_app_local@localhost:5432/oms?sslmode=disable
 LOCAL_AMQP_URL := amqp://oms:oms_local@localhost:5672/

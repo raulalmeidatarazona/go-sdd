@@ -1,1 +1,1 @@
-Lee `AGENTS.md`: contiene las reglas del repositorio. La receta para cualquier funcionalidad nueva está en `docs/sota-caballo-rey.md`.
+Read `AGENTS.md`: it holds the repository rules. The recipe for any new feature is in `docs/feature-playbook.md`.

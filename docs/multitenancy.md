@@ -1,37 +1,37 @@
 # Multi-tenancy
 
-## Modelo
+## Model
 
-Base de datos y esquemas compartidos, con columna `tenant_id` en todas las tablas de negocio y **row-level security (RLS)** de PostgreSQL. Es el modelo más eficiente para muchos tenants pequeños y medianos, y la base de datos impone el aislamiento aunque haya un error en el código.
+Shared database and schemas, a `tenant_id` column on every business table, and PostgreSQL **row-level security (RLS)**. It is the most efficient model for many small and medium tenants, and the database enforces isolation even if the code has a bug.
 
-## Cómo fluye el tenant
+## How the tenant flows
 
-1. **Entrada**: `grpcx.tenantInterceptor` resuelve el tenant con un `TenantResolver` y lo guarda en el `context`. Sin tenant, la respuesta es `UNAUTHENTICATED`.
-2. **Aplicación**: los handlers llaman a `tenancy.FromContext`; no hay tenant por defecto.
-3. **Datos**: `postgres.DB.InTenantTx` abre la transacción y ejecuta `set_config('app.tenant_id', $1, true)`, que solo dura esa transacción. No hay otra forma de acceder a tablas de tenant.
-4. **Base de datos**: las políticas `tenant_isolation` filtran lecturas (`USING`) y rechazan escrituras de otro tenant (`WITH CHECK`).
-5. **Eventos**: el tenant viaja en la cabecera `x-tenant-id`. `inbox.Handle` lo restaura antes de abrir la transacción del consumidor.
+1. **Entry**: `grpcx.tenantInterceptor` resolves the tenant with a `TenantResolver` and stores it in the `context`. Without a tenant the call fails with `UNAUTHENTICATED`.
+2. **Application**: handlers call `tenancy.FromContext`; there is no default tenant.
+3. **Data**: `postgres.DB.InTenantTx` opens the transaction and runs `set_config('app.tenant_id', $1, true)`, which lasts for that transaction only. There is no other way to reach tenant tables.
+4. **Database**: the `tenant_isolation` policies filter reads (`USING`) and reject writes for other tenants (`WITH CHECK`).
+5. **Events**: the tenant travels in the `x-tenant-id` header. `inbox.Handle` restores it before opening the consumer's transaction.
 
-## Roles de base de datos
+## Database roles
 
-| Rol | Uso | RLS |
+| Role | Used for | RLS |
 |---|---|---|
-| `oms_owner` | Dueño del esquema; solo para migraciones | Se le aplica igualmente por `FORCE ROW LEVEL SECURITY` |
-| `oms_app` | Conexión de la API y del worker; `NOBYPASSRLS` y solo `SELECT/INSERT/UPDATE` | Siempre |
+| `oms_owner` | Schema owner; migrations only | Applies anyway thanks to `FORCE ROW LEVEL SECURITY` |
+| `oms_app` | API and worker connections; `NOBYPASSRLS`, only `SELECT/INSERT/UPDATE` | Always |
 
-Sin `app.tenant_id`, `current_tenant_id()` devuelve `NULL` y las políticas no devuelven filas. Esto lo comprueba `TestRowLevelSecurity`.
+Without `app.tenant_id`, `current_tenant_id()` returns `NULL` and the policies return no rows. `TestRowLevelSecurity` checks this.
 
-`messaging.outbox` y `messaging.inbox` no tienen RLS: son infraestructura que el relay lee para todos los tenants. La API solo inserta en ellas a través del repositorio.
+`messaging.outbox` and `messaging.inbox` have no RLS: they are infrastructure the relay reads across tenants. The API only inserts into them through the repository.
 
-## Producción: tenant autenticado
+## Production: authenticated tenants
 
-`grpcx.HeaderTenantResolver` confía en la cabecera `X-Tenant-Id`. Solo es aceptable detrás de un gateway que **ya** autentica y fija esa cabecera. Para exponer la API directamente, sustitúyelo en `cmd/api/main.go` por un resolver que valide el token y lea el claim:
+`grpcx.HeaderTenantResolver` trusts the `X-Tenant-Id` header. That is only acceptable behind a gateway that **already** authenticates the caller and sets the header. To expose the API directly, replace it in `cmd/api/main.go` with a resolver that verifies the token and reads a claim:
 
 ```go
 func JWTTenantResolver(verifier *oidc.IDTokenVerifier) grpcx.TenantResolver {
 	return func(ctx context.Context) (tenancy.ID, error) {
-		raw := bearerToken(ctx)                   // de la metadata "authorization"
-		token, err := verifier.Verify(ctx, raw)   // firma, exp, aud, iss
+		raw := bearerToken(ctx)                 // from the "authorization" metadata
+		token, err := verifier.Verify(ctx, raw) // signature, exp, aud, iss
 		if err != nil {
 			return "", tenancy.ErrMissing
 		}
@@ -44,8 +44,8 @@ func JWTTenantResolver(verifier *oidc.IDTokenVerifier) grpcx.TenantResolver {
 }
 ```
 
-La autorización por rol dentro del tenant (quién puede cancelar, por ejemplo) se añade como otro interceptor o en el handler. El dominio no conoce usuarios.
+Role-based authorisation inside a tenant (who may cancel, for example) belongs in another interceptor or in the handler. The domain does not know about users.
 
-## Escalar más allá
+## Scaling further
 
-Si un tenant necesita aislamiento físico (por normativa o por volumen), el mismo código sirve con una base de datos por tenant: el resolver elige además el pool. RLS se mantiene como segunda barrera.
+If a tenant needs physical isolation (regulation or volume), the same code works with one database per tenant: the resolver also selects the pool. RLS stays as a second barrier.
