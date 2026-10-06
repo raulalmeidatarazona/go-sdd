@@ -101,3 +101,7 @@ docs/                     architecture, playbook, ADRs and operations
 ## Commands
 
 `make help` lists them all. The main ones are `proto` (regenerate the contract), `lint`, `test`, `check` (what CI runs), `up`, `down`, `reset` (deletes data), `logs` and `migrate-new NAME=...`.
+
+## License
+
+[0BSD](LICENSE): use, copy, modify and distribute for any purpose, with or without attribution.
