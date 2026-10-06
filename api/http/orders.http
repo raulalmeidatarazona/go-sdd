@@ -1,0 +1,38 @@
+# REST requests for VS Code REST Client / JetBrains HTTP Client.
+@baseUrl = http://localhost:8080
+@tenant = 8b5d3c1e-7d6f-4c2a-9a59-0d7f3c0b2a11
+
+### Place order (repeat with the same key: same orderId)
+# @name place
+POST {{baseUrl}}/v1/orders
+X-Tenant-Id: {{tenant}}
+Content-Type: application/json
+
+{
+  "idempotencyKey": "demo-001",
+  "customerId": "customer-42",
+  "currencyCode": "EUR",
+  "lines": [
+    { "sku": "SKU-RED-M", "quantity": 2, "unitPriceMinor": 1999 },
+    { "sku": "SKU-BLUE-L", "quantity": 1, "unitPriceMinor": 4500 }
+  ]
+}
+
+### Get order
+GET {{baseUrl}}/v1/orders/{{place.response.body.orderId}}
+X-Tenant-Id: {{tenant}}
+
+### List orders (filters: status, customerId; pagination: pageSize, pageToken)
+GET {{baseUrl}}/v1/orders?pageSize=20&status=ORDER_STATUS_PLACED
+X-Tenant-Id: {{tenant}}
+
+### Cancel order
+POST {{baseUrl}}/v1/orders/{{place.response.body.orderId}}:cancel
+X-Tenant-Id: {{tenant}}
+Content-Type: application/json
+
+{ "reason": "customer changed mind" }
+
+### gRPC equivalent (grpcurl, reflection is enabled):
+# grpcurl -plaintext -H 'x-tenant-id: 8b5d3c1e-7d6f-4c2a-9a59-0d7f3c0b2a11' \
+#   -d '{"page_size": 5}' localhost:9090 oms.order.v1.OrderService/ListOrders

@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make tools
+      - name: Lint protos
+        run: bin/buf lint
+      - name: Breaking changes against main
+        if: github.event_name == 'pull_request'
+        run: bin/buf breaking --against ".git#branch=origin/main"
+      - name: Generated code is up to date
+        run: |
+          bin/buf generate
+          git diff --exit-code -- gen
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go mod verify
+      - name: golangci-lint
+        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run ./...
+      - name: Unit tests
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+      - name: Vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  integration:
+    runs-on: ubuntu-latest
+    needs: [go]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Start platform
+        run: docker compose up -d --build --wait
+      - name: End-to-end tests
+        run: go test -race -count=1 -tags=integration ./test/...
+      - name: Smoke
+        run: ./scripts/smoke.sh
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs api worker migrate

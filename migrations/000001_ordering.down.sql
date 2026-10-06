@@ -1,0 +1,9 @@
+DROP TABLE IF EXISTS messaging.inbox;
+DROP TABLE IF EXISTS messaging.outbox;
+DROP TABLE IF EXISTS ordering_read.order_views;
+DROP TABLE IF EXISTS ordering.order_lines;
+DROP TABLE IF EXISTS ordering.orders;
+DROP FUNCTION IF EXISTS current_tenant_id();
+DROP SCHEMA IF EXISTS messaging;
+DROP SCHEMA IF EXISTS ordering_read;
+DROP SCHEMA IF EXISTS ordering;

@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package oms.order.v1;
+
+import "google/protobuf/timestamp.proto";
+import "oms/order/v1/order.proto";
+
+option go_package = "github.com/raulalmeidatarazona/go-sdd/gen/go/oms/order/v1;orderv1";
+
+// Integration events published to RabbitMQ (exchange "oms.events").
+// The AMQP "type" property and the routing key carry the full message name,
+// e.g. "oms.order.v1.OrderPlaced". Tenant, aggregate id/version and trace
+// context travel as AMQP headers. Evolve these messages compatibly only:
+// add fields, never renumber or change types (enforced by `buf breaking`).
+
+message OrderPlaced {
+  string order_id = 1;
+  string customer_id = 2;
+  string currency_code = 3;
+  repeated LineItem lines = 4;
+  int64 total_minor = 5;
+  google.protobuf.Timestamp placed_at = 6;
+}
+
+message OrderCancelled {
+  string order_id = 1;
+  string reason = 2;
+  google.protobuf.Timestamp cancelled_at = 3;
+}

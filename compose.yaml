@@ -1,0 +1,143 @@
+# Full local platform. `make up` starts everything; `make infra` starts only the
+# dependencies so you can run the binaries with `make run-api` / `make run-worker`.
+name: oms
+
+x-app-env: &app-env
+  ENVIRONMENT: local
+  LOG_LEVEL: info
+  DATABASE_URL: postgres://oms_app:${OMS_APP_PASSWORD:-oms_app_local}@postgres:5432/oms?sslmode=disable
+  RABBITMQ_URL: amqp://${RABBITMQ_USER:-oms}:${RABBITMQ_PASSWORD:-oms_local}@rabbitmq:5672/
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_EXPORTER_OTLP_INSECURE: "true"
+  OTEL_METRIC_EXPORT_INTERVAL: "5000"
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: oms
+      POSTGRES_USER: oms_owner
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oms_owner_local}
+      OMS_APP_PASSWORD: ${OMS_APP_PASSWORD:-oms_app_local}
+    ports: ["5432:5432"]
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oms_owner -d oms"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: migrate/migrate:v4.18.3
+    command: ["-path", "/migrations", "-database", "postgres://oms_owner:${POSTGRES_PASSWORD:-oms_owner_local}@postgres:5432/oms?sslmode=disable", "up"]
+    volumes:
+      - ./migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  rabbitmq:
+    image: rabbitmq:4.1-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-oms}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-oms_local}
+    ports: ["5672:5672", "15672:15672"]
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build: .
+    image: oms:local
+    entrypoint: ["/oms-api"]
+    environment:
+      <<: *app-env
+      OTEL_SERVICE_NAME: oms-api
+    ports: ["8080:8080", "9090:9090"]
+    healthcheck:
+      test: ["CMD", "/oms-api", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+    restart: unless-stopped
+
+  worker:
+    image: oms:local
+    entrypoint: ["/oms-worker"]
+    environment:
+      <<: *app-env
+      OTEL_SERVICE_NAME: oms-worker
+    ports: ["8081:8081"]
+    healthcheck:
+      test: ["CMD", "/oms-worker", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      api:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  swagger-ui:
+    image: swaggerapi/swagger-ui:v5.21.0
+    environment:
+      URL: http://localhost:8080/openapi.json
+    ports: ["8082:8080"]
+
+  # Observability -------------------------------------------------------------
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.128.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    ports: ["4317:4317", "4318:4318"]
+    depends_on: [jaeger, loki]
+
+  jaeger:
+    image: jaegertracing/jaeger:2.7.0
+    ports: ["16686:16686"]
+
+  prometheus:
+    image: prom/prometheus:v3.4.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["9091:9090"]
+
+  loki:
+    image: grafana/loki:3.5.0
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+
+  grafana:
+    image: grafana/grafana:12.0.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["${GRAFANA_PORT:-3300}:3000"]
+    depends_on: [prometheus, loki, jaeger]
+
+volumes:
+  postgres-data:
+  rabbitmq-data:

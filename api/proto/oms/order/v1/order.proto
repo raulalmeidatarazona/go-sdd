@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package oms.order.v1;
+
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/raulalmeidatarazona/go-sdd/gen/go/oms/order/v1;orderv1";
+
+// Lifecycle of an order. Values map 1:1 to domain.Status.
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  ORDER_STATUS_PLACED = 1;
+  ORDER_STATUS_CANCELLED = 2;
+}
+
+// A purchased item. Prices are integers in the currency's minor unit (cents)
+// to avoid floating point rounding.
+message LineItem {
+  string sku = 1 [(google.api.field_behavior) = REQUIRED];
+  int32 quantity = 2 [(google.api.field_behavior) = REQUIRED];
+  int64 unit_price_minor = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+// Read model of an order. Served from the query side, so it is eventually
+// consistent with commands (typically a few milliseconds behind).
+message Order {
+  string order_id = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string customer_id = 2;
+  OrderStatus status = 3;
+  string currency_code = 4;
+  repeated LineItem lines = 5;
+  int64 total_minor = 6;
+  string cancellation_reason = 7;
+  google.protobuf.Timestamp placed_at = 8;
+  google.protobuf.Timestamp update_time = 9;
+  // Aggregate version the view reflects. Increases on every state change.
+  int64 version = 10;
+}

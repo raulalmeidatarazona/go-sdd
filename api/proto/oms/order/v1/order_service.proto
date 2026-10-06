@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package oms.order.v1;
+
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "oms/order/v1/order.proto";
+import "protoc-gen-openapiv2/options/annotations.proto";
+
+option go_package = "github.com/raulalmeidatarazona/go-sdd/gen/go/oms/order/v1;orderv1";
+option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_swagger) = {
+  info: {
+    title: "OMS Order API"
+    version: "1.0"
+    description: "REST facade transcoded from the gRPC OrderService. Every request must carry the X-Tenant-Id header."
+  }
+  schemes: [
+    HTTP,
+    HTTPS
+  ]
+  consumes: "application/json"
+  produces: "application/json"
+};
+
+// OrderService is the public contract of the ordering bounded context.
+// Commands (Place, Cancel) return identifiers only; read through queries.
+service OrderService {
+  // Places a new order. Idempotent per (tenant, idempotency_key).
+  rpc PlaceOrder(PlaceOrderRequest) returns (PlaceOrderResponse) {
+    option (google.api.http) = {
+      post: "/v1/orders"
+      body: "*"
+    };
+  }
+
+  // Cancels a placed order.
+  rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse) {
+    option (google.api.http) = {
+      post: "/v1/orders/{order_id}:cancel"
+      body: "*"
+    };
+  }
+
+  // Returns one order from the read model.
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse) {
+    option (google.api.http) = {get: "/v1/orders/{order_id}"};
+  }
+
+  // Lists orders newest first using opaque cursor pagination.
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse) {
+    option (google.api.http) = {get: "/v1/orders"};
+  }
+}
+
+message PlaceOrderRequest {
+  // Client-generated key. Retrying with the same key and payload returns the
+  // original order; the same key with a different payload fails with ALREADY_EXISTS.
+  string idempotency_key = 1 [(google.api.field_behavior) = REQUIRED];
+  string customer_id = 2 [(google.api.field_behavior) = REQUIRED];
+  // ISO 4217 code, e.g. EUR.
+  string currency_code = 3 [(google.api.field_behavior) = REQUIRED];
+  repeated LineItem lines = 4 [(google.api.field_behavior) = REQUIRED];
+}
+
+message PlaceOrderResponse {
+  string order_id = 1;
+}
+
+message CancelOrderRequest {
+  string order_id = 1 [(google.api.field_behavior) = REQUIRED];
+  string reason = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+message CancelOrderResponse {}
+
+message GetOrderRequest {
+  string order_id = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message GetOrderResponse {
+  Order order = 1;
+}
+
+message ListOrdersRequest {
+  // Defaults to 50, maximum 200.
+  int32 page_size = 1;
+  string page_token = 2;
+  // Optional filters.
+  OrderStatus status = 3;
+  string customer_id = 4;
+}
+
+message ListOrdersResponse {
+  repeated Order orders = 1;
+  // Empty when there are no more pages.
+  string next_page_token = 2;
+}

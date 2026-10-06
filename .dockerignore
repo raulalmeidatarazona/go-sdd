@@ -1,0 +1,8 @@
+bin
+.git
+.claude
+docs
+deploy
+test
+*.md
+.env
